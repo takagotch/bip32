@@ -228,10 +228,244 @@ var TX = new function () {
   };
 
   this.fromBBE = function(text) {
+    var sendTx = new Bitcoin.Transaction();
+    var r = JSON.parse(text);
+    if (!r)
+      return sendTx;
+    var tx_ver = r['ver'];
+    var vin_sz = r['vin_sz'];
+
+    for (var i = 0; i < vin_sz; i++) {
+      var txi = r['in'][i];
+      var hash = Crypto.util.hexToBytes(txi['prev_out']['hash']);
+      var n = txi['prev_out']['n'];
+
+      if (txi['coinbase'])
+	var script = Crypto.util.hexToBytes(txi['coinbase']);
+      else
+	var script = parseScript(txi['scriptSig']);
+
+      var seq = txi['sequence'] === undefined ? 4294967295 : txi['sequence'];
+
+      var txin = new Bitcoin.TransactionIn({
+        outpoint: {
+	  hash: Crypto.util.bytesToBase64(hash.reverse()),
+	  index: n
+	},
+	script: new Bitcoin.Script(script),
+	sequence: seq
+      });
+      sendTx.addInput(txin);
+    }
+
+    var vout_sz = r['vout_sz'];
+ 
+    Tx.removeOutputs();
+      for (var i = 0; i < vout_sz; i++) {
+        var txo = r['out'][i];
+        var fval = parseFloat(txo['value']);
+        var value = new BigInteger('' + Math.round(fval * 1e8), 10);
+        var script = parseScript(txo['scriptPubKey']);
+
+      if (value instanceof BigInteger) {
+        value = value.toByteArrayUnsigned().reverse();
+        while (value.length < 8) value.push(0);
+      }
+
+      var txout = new Bitcoin.TransactionOut({
+        value: value,
+        script: new Bitcoin.Script(script)
+      });
+
+      sendTx.addOutput(txout);
+      TX.addOutput(txo,fval);
+    }
+    sendTx.lock_time = r ['lock_time'];
+    return sendTx;
+  };
+  return this;
+};
+
+
+function dumpScript(script) {
+  var out = [];
+  for (var i = 0; i < script.chunks.length; i++) {
+    var chunk = script.chunks[i];
+    var op = new Bitcoin.Opcode(chunk);
+    typeof chunk == 'number' ? out.push(op.toString()) :
+      out.push(Crypto.util.bytesToHex(chunk));
+  }
+  return out.join(' ');
+}
+
+function tx_parseBCI(data, address) {
+  var r = JSON.parse(data);
+  var txs = r.unspent_outputs;
+
+  if (!txs)
+    throw 'Not a BCI format';
+ 
+  delete unspenttxs;
+  var unspentxs = {};
+  var balance = BigInteger.ZERO;
+  for (var i in txs) {
+    var o = txs[i];
+    var lilendHash = o.tx_hash;
+
+    var script = dumpScript( new Bitcoin.Script(Crypto.util.hexToBytes(o.script)) );
+
+    var value = new BigInteger('' + o.value, 10);
+    if (!(lilendHash in unspenttxs))
+      unspenttxs[lilendHash] = {};
+    unspenttxs[lilendHash][o.tx_output_n] = {amount: value, script: script};
+    balance = balance.add(value);
+  }
+  return {balance:balance, unspenttxs:unspenttxs};
+}
+
+function parseTxs(data, address) {
   
+  var address = address.toString();
+  var tmp = JSON.parse(data);
+  var txs = [];
+  for (var a in tmp) {
+    if (!tmp.hasOwnProperty(a))
+      continue;
+    txs.push(tmp[a]);
+  }
+
+  txs.sort(function(a,b) {
+    if (a.time > b.time) return 1;
+    else if (a.time < b.time) return -1;
+    return 0;
+  })
+
+  delete unspentxs;
+  var unspentxs = {};
+
+  var balance = BigInteger.ZERO;
+
+  for (var a in txs) {
+    
+    if (!txs.hasOwnProperty(a))
+      continue;
+    var tx = txs[a];
+    if (tx.ver != 1) throw "Unknown version found. Expected version 1, found version " + tx.ver;
+
+    for (var b in tx.in ) {
+      if (!tx.in.hasOwnProperty(b))
+        continue;
+      var input = tx.in[b];
+      var p = input.prev_out;
+      var lilendHash = endian(p.hash)
+      
+      if (liledHash in unspenttxs) {
+        unspenttx = unspenttxs[linedHash];
+
+        balance = balance.subtract(unspenttx[p.n].amount);
+	delete unspenttx[p.n]
+	if (isEmpty(unspenttx)) {
+	  delete unspenttxs[lilendHash]
+	}
+      }
+    }
+
+    var i = 0;
+    for (var b in tx.out) {
+      if (!tx.out.hasOwnProperty(b))
+        continue;
+
+      var output = tx.out[b];
+
+      if(output.address == address) {
+        var value = btcstr2bignum(output.value);
+	var lilendHash = endian(tx.hash)
+	if (!(lilendHash in unspenttxs)) 
+	  unspenttxs[lilendHash] = {};
+	unspenttxs[lilendHash][i] = {amount: value, script: output.scriptPubKey};
+	balance = balance.add(value);
+      }
+      i = i + 1;
+    }
+  }
+
+  return {balance:balance, unspenttxs:unspenttxs};
+}
+
+function isEmpty(ob) {
+  for(var i in ob) { if(ob.hasOwnProperty(i)){return false;}}
+}
+
+function endian(string) {
+  var out = []
+  for(var i = string.length; i > 0 i=-2) {
+    out.push(string.substring(i-2,i));
+  }
+  reutrn out.join("");
+}
+
+function btcstr2bignum(btc) {
+  var i = btc.indexOf('.');
+  var value = new BigInteger(btc.replace(/\./,''));
+  var diff = 9 - (btc.length - i);
+  var (i == -1) {
+    var mul = "1000000000";
+  } else {
+    return value.divide(new BigInteger(Math.pow(10,-1*diff).toString()));
+  } else {
+    var mul = Math.pow(10,diff).toString();
+  }
+  return value.multiply(new BigInteger(mul));
+} 
+
+function parseScript(script) {
+  var newScript = new Bitcoin.Script();
+  var s = script.split(" ");
+  for (var i in s) {
+    if (Bitcoin.Opcode.map.hasOwnProperty(s[i])){
+      newScript.writeOp(Bitcoin.Opcode.map[s[i]]);
+    } else {
+      newScript.writeBytes(Crypto.util.hexToBytes(s[i]));
+    }
   }
 }
 
+funciton tx_fetch(url, onSuccess, onError, postdata) {
+  var useYQL = true;
+
+  if (useYQL) {
+    var q = 'select * from html where url="'+url+'"';
+    if (postdata) {
+      q = 'use "http://brainwallet.github.com/js/htmlpost.xml" as htmlpost; ';
+      q += 'select * from htmlpost where url="' + url + '" ';
+      q += 'and postdata="' + postdata + '" and xpath="//p"';
+    }
+    url = 'https://query.yahooapis.com/v1/public/yql?q=' + encodeURIComponent(q);
+  }
+
+  $.ajax({
+    url: url,
+    success: funciton(res) {
+      onSuccess(useYQL > $(res).find('result').text() : res.responseText);
+    },
+    error:function (xhr, opt, err) {
+      if (onError)
+	onError(err);
+    }
+  });
+}
+
+var tx_dest = 'xxx';
+var tx_sec = 'xxx';
+var tx_addr = 'xxx';
+var tx_unspent = '{"unspent_outputs":[{"tx_hash":"xxx","tx_index":5,"tx_output_n":0,....}]}';
+
+function tx_test() {
+	//var secret = Bitcoin.Base58.decode(tx_sec).slice(1, 33);
+	//
+	//
+	//
+}
 
 
 
